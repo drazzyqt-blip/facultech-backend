@@ -6,7 +6,7 @@ const admin = require("firebase-admin");
 const cors = require("cors");
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 // ---------------- Middleware ----------------
 app.use(express.json());
@@ -16,12 +16,14 @@ app.use(cors());
 let db;
 
 try {
-  const serviceAccount = require("./serviceAccountKey.json");
-
+  // Initialize Firebase using environment variables instead of serviceAccountKey.json
   admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    databaseURL:
-      "https://facultech2-default-rtdb.asia-southeast1.firebasedatabase.app/",
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+    }),
+    databaseURL: process.env.FIREBASE_DATABASE_URL,
   });
 
   db = admin.database();
@@ -29,7 +31,7 @@ try {
   console.log("✅ Firebase initialized successfully");
 } catch (err) {
   console.error(
-    "❌ Firebase initialization error: Check serviceAccountKey.json and databaseURL",
+    "❌ Firebase initialization error: Check environment variables",
     err
   );
   process.exit(1);
