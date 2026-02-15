@@ -1,0 +1,29 @@
+{
+  "name": "facultech-backend",
+  "version": "1.0.0",
+  "description": "FACULTECH Smoke & Vape Detection Backend Server",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "keywords": [
+    "facultech",
+    "firebase",
+    "esp32",
+    "pwa",
+    "push-notifications"
+  ],
+  "author": "Sean Pedraza",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.3.1",
+    "express": "^4.18.2",
+    "firebase-admin": "^13.6.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
