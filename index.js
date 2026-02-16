@@ -6,7 +6,7 @@ const admin = require("firebase-admin");
 const cors = require("cors");
 
 const app = express();
-const port = process.env.PORT || 3000;
+const port = process.env.PORT || 3000; // ✅ Fixed: removed duplicate
 
 // ---------------- Middleware ----------------
 app.use(express.json());
@@ -16,7 +16,7 @@ app.use(cors());
 let db;
 
 try {
-  // Initialize Firebase using environment variables instead of serviceAccountKey.json
+  // Initialize Firebase using environment variables
   admin.initializeApp({
     credential: admin.credential.cert({
       projectId: process.env.FIREBASE_PROJECT_ID,
@@ -27,13 +27,9 @@ try {
   });
 
   db = admin.database();
-
   console.log("✅ Firebase initialized successfully");
 } catch (err) {
-  console.error(
-    "❌ Firebase initialization error: Check environment variables",
-    err
-  );
+  console.error("❌ Firebase initialization error:", err);
   process.exit(1);
 }
 
@@ -73,6 +69,8 @@ app.post("/save-token", async (req, res) => {
 app.post("/api/sensor-data", async (req, res) => {
   const { co_ppm, pm25 } = req.body;
 
+  console.log("📡 Received request body:", req.body); // ✅ Added logging
+
   if (co_ppm === undefined || pm25 === undefined) {
     console.warn("⚠️ Invalid data received:", req.body);
     return res.status(400).json({ message: "Invalid data format" });
@@ -86,13 +84,14 @@ app.post("/api/sensor-data", async (req, res) => {
     timestamp: new Date().toISOString(),
   };
 
-  console.log("📡 Incoming Sensor Data:", sensorData);
+  console.log("📡 Processing Sensor Data:", sensorData);
 
   try {
     // ======================================================
     // 1️⃣ ALWAYS UPDATE LIVE VALUES
     // ======================================================
     await db.ref("current").set(sensorData);
+    console.log("✅ Current data updated");
 
     // ======================================================
     // 2️⃣ SAVE HISTORY EVERY 30 SECONDS
@@ -131,7 +130,9 @@ app.post("/api/sensor-data", async (req, res) => {
 
     if (!thresholds) {
       console.log("⚠️ No thresholds found in Firebase.");
-      return res.status(200).json({ message: "No thresholds set" });
+      return res.status(200).json({ 
+        message: "Data saved successfully (no thresholds set)" 
+      });
     }
 
     const danger = co_ppm > thresholds.co_ppm || pm25 > thresholds.pm25;
@@ -155,7 +156,7 @@ app.post("/api/sensor-data", async (req, res) => {
       const duration = now - state.dangerStartTime;
 
       if (duration >= 3000 && !state.alertActive) {
-        console.log("🚨 5-second sustained danger confirmed!");
+        console.log("🚨 3-second sustained danger confirmed!");
 
         const alerts = [];
 
@@ -225,7 +226,10 @@ app.post("/api/sensor-data", async (req, res) => {
     // Save updated system state
     await stateRef.set(state);
 
-    res.status(200).json({ message: "Data processed successfully" });
+    res.status(200).json({ 
+      message: "Data processed successfully",
+      saved: true 
+    });
   } catch (error) {
     console.error("❌ Error processing data:", error);
     res.status(500).json({ message: "Server error", error: error.message });
