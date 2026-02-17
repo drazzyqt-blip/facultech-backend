@@ -1,12 +1,16 @@
 // index.js - FACULTECH backend
 
+// Load environment variables from .env file
+require("dotenv").config();
+
 // ---------------- Imports ----------------
 const express = require("express");
 const admin = require("firebase-admin");
 const cors = require("cors");
+const { getRecentRecordings, moveRecordingsToAlerts } = require("./utils.js");
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 // ---------------- Middleware ----------------
 app.use(express.json());
@@ -16,12 +20,15 @@ app.use(cors());
 let db;
 
 try {
-  const serviceAccount = require("./serviceAccountKey.json");
-
+  // Initialize Firebase using environment variables instead of serviceAccountKey.json
+  console.log(process.env.FIREBASE_PROJECT_ID);
   admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    databaseURL:
-      "https://facultech2-default-rtdb.asia-southeast1.firebasedatabase.app/",
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"), // Handle newlines in private key
+    }),
+    databaseURL: process.env.FIREBASE_DATABASE_URL,
   });
 
   db = admin.database();
@@ -29,7 +36,7 @@ try {
   console.log("✅ Firebase initialized successfully");
 } catch (err) {
   console.error(
-    "❌ Firebase initialization error: Check serviceAccountKey.json and databaseURL",
+    "❌ Firebase initialization error: Check environment variables",
     err
   );
   process.exit(1);
@@ -167,6 +174,16 @@ app.post("/api/sensor-data", async (req, res) => {
           ...sensorData,
           alerts,
         });
+
+        // Get the 2 recent clips from the local recordings/tapo folder
+        // And upload them to Firebase Storage, then get their URLs to include in the alert
+        // For now just move them to another folder called alerts_clips and include their local paths in the alert record
+        const recordings = await getRecentRecordings(new Date().getTime());
+
+        const alertClips = await moveRecordingsToAlerts(recordings);
+
+        console.log("🎬 Alert clips moved:", alertClips);
+  
 
         // 🔥 AUTO DELETE OLD ALERTS (KEEP LAST 100)
         const alertsSnapshot = await db.ref("alerts").once("value");
