@@ -2,3 +2,7 @@ node_modules
 serviceAccountKey.json
 .env
 /recordings
+/alert_clips
+/thumbnails
+*.mp4
+*.jpg

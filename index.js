@@ -5,9 +5,10 @@ require("dotenv").config();
 
 // ---------------- Imports ----------------
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
 const admin = require("firebase-admin");
 const cors = require("cors");
-const { getRecentRecordings, moveRecordingsToAlerts } = require("./utils.js");
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -15,6 +16,21 @@ const port = process.env.PORT || 3000;
 // ---------------- Middleware ----------------
 app.use(express.json());
 app.use(cors());
+
+// Static Serving for Videos
+const alertsClipsDir = path.join(__dirname, "alerts_clips");
+const recordingsDir = path.join(__dirname, "recordings", "tapo");
+
+// Ensure directories exist
+[alertsClipsDir, recordingsDir].forEach((dir) => {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`📁 Created directory: ${dir}`);
+  }
+});
+
+app.use("/videos/alerts", express.static(alertsClipsDir));
+app.use("/videos/raw", express.static(recordingsDir));
 
 // ---------------- Firebase Initialization ----------------
 let db;
@@ -37,7 +53,7 @@ try {
 } catch (err) {
   console.error(
     "❌ Firebase initialization error: Check environment variables",
-    err
+    err,
   );
   process.exit(1);
 }
@@ -167,25 +183,26 @@ app.post("/api/sensor-data", async (req, res) => {
         if (co_ppm > thresholds.co_ppm)
           alerts.push(`CO level high: ${co_ppm} ppm`);
 
-        if (pm25 > thresholds.pm25)
-          alerts.push(`PM2.5 level high: ${pm25}`);
+        if (pm25 > thresholds.pm25) alerts.push(`PM2.5 level high: ${pm25}`);
 
         await db.ref("alerts").push({
           ...sensorData,
           alerts,
         });
 
-        // Get the 2 recent clips from the local recordings/tapo folder
-        // And upload them to Firebase Storage, then get their URLs to include in the alert
-        // For now just move them to another folder called alerts_clips and include their local paths in the alert record
+        // ======================================================
+        // 4️⃣ GET RECENT RECORDINGS
+        // ======================================================
         const recordings = await getRecentRecordings(new Date().getTime());
 
+        // ======================================================
+        // 5️⃣ MOVE RECORDINGS TO ALERTS
+        // ======================================================
         const alertClips = await moveRecordingsToAlerts(recordings);
 
-        console.log("🎬 Alert clips moved:", alertClips);
-  
-
-        // 🔥 AUTO DELETE OLD ALERTS (KEEP LAST 100)
+        // ======================================================
+        // 7️⃣ AUTO DELETE OLD ALERTS (KEEP LAST 100)
+        // ======================================================
         const alertsSnapshot = await db.ref("alerts").once("value");
         const alertRecords = alertsSnapshot.val();
 
@@ -203,7 +220,9 @@ app.post("/api/sensor-data", async (req, res) => {
           }
         }
 
-        // 🔔 SEND PUSH NOTIFICATIONS
+        // ======================================================
+        // 8️⃣ SEND PUSH NOTIFICATIONS
+        // ======================================================
         const tokensSnapshot = await db.ref("fcm_tokens").once("value");
         const tokensData = tokensSnapshot.val();
 
@@ -218,8 +237,9 @@ app.post("/api/sensor-data", async (req, res) => {
             tokens: tokens,
           };
 
-          const response =
-            await admin.messaging().sendEachForMulticast(message);
+          const response = await admin
+            .messaging()
+            .sendEachForMulticast(message);
 
           console.log(`🔔 Notifications sent: ${response.successCount}`);
         } else {
@@ -274,6 +294,150 @@ app.get("/latest-data", async (req, res) => {
     });
   } catch (err) {
     console.error("❌ Error fetching latest data:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================================
+// ==========================================================
+// 📊 CONFIGURE THRESHOLDS ENDPOINT
+// ==========================================================
+app.post("/configure-thresholds", async (req, res) => {
+  try {
+    const { co_ppm, pm25 } = req.body;
+    await db.ref("thresholds").set({ co_ppm, pm25 });
+    res.status(200).json({ message: "Thresholds configured successfully" });
+  } catch (err) {
+    console.error("❌ Error configuring thresholds:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================================
+// ---------------- Thumbnails ----------------
+const thumbnailsDir = path.join(__dirname, "thumbnails");
+if (!fs.existsSync(thumbnailsDir)) {
+  fs.mkdirSync(thumbnailsDir, { recursive: true });
+}
+app.use("/thumbnails", express.static(thumbnailsDir));
+
+const {
+  getRecentRecordings,
+  moveRecordingsToAlerts,
+  listVideosInDir,
+  getVideosWithThumbnails,
+  listAnomalyFolders,
+} = require("./utils.js");
+
+// Helper to paginate
+const paginate = (items, page = 1, limit = 10) => {
+  const startIndex = (page - 1) * limit;
+  const endIndex = page * limit;
+  return {
+    data: items.slice(startIndex, endIndex),
+    meta: {
+      total: items.length,
+      page: Number(page),
+      limit: Number(limit),
+      totalPages: Math.ceil(items.length / limit),
+    },
+  };
+};
+
+// ==========================================================
+// 📹 GET CLIPS ENDPOINT
+// ==========================================================
+app.get("/get-clips", async (req, res) => {
+  try {
+    const { page = 1, limit = 10, folder } = req.query;
+
+    // If folder is specified, return clips inside that folder
+    if (folder) {
+      const clips = await getVideosWithThumbnails(alertsClipsDir, folder);
+      const formattedClips = clips.map((clip) => ({
+        name: clip.name,
+        size: clip.size,
+        date: clip.date,
+        // Url needs to include the subfolder
+        url: `/videos/alerts/${folder}/${path.basename(clip.path)}`,
+        thumbnailUrl: clip.thumbnailUrl
+          ? `/thumbnails/${path.basename(clip.thumbnailUrl)}`
+          : null,
+      }));
+      return res.status(200).json(paginate(formattedClips, page, limit));
+    }
+
+    // Otherwise return list of anomaly folders
+    const folders = listAnomalyFolders(alertsClipsDir);
+    res.status(200).json(paginate(folders, page, limit));
+  } catch (err) {
+    console.error("❌ Error fetching clips:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/get-recordings", async (req, res) => {
+  try {
+    const { page = 1, limit = 10 } = req.query;
+    const recordings = await getVideosWithThumbnails(recordingsDir);
+
+    const formattedRecordings = recordings.map((rec) => ({
+      name: rec.name,
+      size: rec.size,
+      date: rec.date,
+      url: `/videos/raw/${path.relative(recordingsDir, rec.path).replace(/\\/g, "/")}`,
+      thumbnailUrl: rec.thumbnailUrl
+        ? `/thumbnails/${path.basename(rec.thumbnailUrl)}`
+        : null,
+    }));
+
+    res.status(200).json(paginate(formattedRecordings, page, limit));
+  } catch (err) {
+    console.error("❌ Error fetching recordings:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================================
+// ==========================================================
+// 📊 GET TABLE ANALYTICS ENDPOINT
+// ==========================================================
+app.get("/api/history", async (req, res) => {
+  try {
+    const snapshot = await db
+      .ref("sensor_readings")
+      .limitToLast(100)
+      .once("value");
+    const data = snapshot.val();
+    const formattedData = data ? Object.values(data) : [];
+    res.status(200).json(formattedData);
+  } catch (err) {
+    console.error("❌ Error fetching sensor history:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/alerts", async (req, res) => {
+  try {
+    const snapshot = await db.ref("alerts").limitToLast(100).once("value");
+    const data = snapshot.val();
+    const formattedData = data ? Object.values(data) : [];
+    res.status(200).json(formattedData);
+  } catch (err) {
+    console.error("❌ Error fetching alerts history:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/get-table-analytics", async (req, res) => {
+  try {
+    const snapshot = await db
+      .ref("sensor_readings")
+      .limitToLast(500)
+      .once("value");
+    res.status(200).json(snapshot.val());
+  } catch (err) {
+    console.error("❌ Error fetching analytics:", err);
     res.status(500).json({ error: err.message });
   }
 });
